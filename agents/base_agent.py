@@ -7,7 +7,6 @@ import uuid
 from llm_service.service import llm
 from prompt.prompts import build_farmer_profile_prompt
 from models.output_structure import InfoResponse
-from models.input_structure import InputState
 from tools.input_router import input_router_node
 from typing import TypedDict, Optional, Literal
 
