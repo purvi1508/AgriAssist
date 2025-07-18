@@ -36,3 +36,5 @@ def input_router_node(state: dict) -> dict:
 
     else:
         return {**state, "error": f"Unsupported input type: {input_state.input_type}"}
+    
+

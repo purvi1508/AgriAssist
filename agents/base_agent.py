@@ -7,18 +7,8 @@ import uuid
 from llm_service.service import llm
 from prompt.prompts import build_farmer_profile_prompt
 from models.output_structure import InfoResponse
+from models.input_structure import InputState
 from tools.input_router import input_router_node
-from typing import TypedDict, Optional, Literal
-
-class State(TypedDict, total=False):
-    input_type: Literal["text", "audio", "image+text", "image+audio"]
-    text: Optional[str]
-    audio_path: Optional[str]
-    image_path: Optional[str]
-    primary_language: Optional[str]
-    target_language: Optional[str]
-    profile: Optional[dict]
-    error: Optional[str]
 
 class FarmerProfileAgent(Runnable):
     def __init__(self):
@@ -33,15 +23,14 @@ class FarmerProfileAgent(Runnable):
 
 def profile_node(state: dict) -> dict:
     input_text = state.get("text", "")
+    profile_agent = FarmerProfileAgent()
     profile_data = profile_agent.invoke(input_text)
     return {
         **state,
         "profile": profile_data
     }
 
-profile_agent = FarmerProfileAgent()
-
-graph = StateGraph(State)
+graph = StateGraph(InputState)
 graph.add_node("input_router", input_router_node)
 graph.add_node("extract_profile", profile_node)
 
