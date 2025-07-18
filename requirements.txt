@@ -1,0 +1,7 @@
+langchain_google_vertexai == 2.0.27
+langchain ==  0.3.26
+google-cloud-speech == 2.33.0
+google-cloud-translate == 3.21.1
+pydantic == 2.11.7
+dotenv
+langgraph
