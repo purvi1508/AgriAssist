@@ -70,3 +70,14 @@ class FarmerProfile(BaseModel):
 class InfoResponse(BaseModel):
     farmer_profile: Optional[FarmerProfile] = None
     personalization: Optional[Personalization] = None
+
+class FarmerIntentPlannerResponse(BaseModel):
+    intent: List[str]
+    scheme_topic: List[str]
+
+class RelevanceCheckResponse(BaseModel):
+    is_relevant: bool
+    reason: str
+
+class FinalAnswerResponse(BaseModel):
+    final_answer: str

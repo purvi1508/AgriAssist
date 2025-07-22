@@ -4,6 +4,7 @@ from langchain.output_parsers import PydanticOutputParser
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import StateGraph
 import uuid
+import json
 from llm_service.service import llm
 from prompt.prompts import build_farmer_profile_prompt
 from models.output_structure import InfoResponse
@@ -56,3 +57,6 @@ intro_graph = graph.compile(checkpointer=memory)
 # )
 
 # print(result["profile"])
+
+# with open("ramesh_profile_output.json", "w", encoding="utf-8") as f:
+#     json.dump(result, f, ensure_ascii=False, indent=4)

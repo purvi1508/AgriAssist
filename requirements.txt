@@ -5,3 +5,7 @@ google-cloud-translate == 3.21.1
 pydantic == 2.11.7
 dotenv
 langgraph
+beautifulsoup4 
+google-cloud-firestore
+sentence_transformers == 5.0.0
+aiohttp
