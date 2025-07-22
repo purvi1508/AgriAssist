@@ -43,7 +43,7 @@ def farmer_intent_planner_prompt(
 You are a smart assistant that helps farmers understand government schemes.
 
 Given the farmer's profile and a query, extract:
-1. The farmer's intent (intent)
+1. The farmer's **intent**, including any specific **problem or need** they mention (intent)
 2. The relevant scheme topic (scheme_topic)
 - If the farmer asks about a specific location (e.g. state or district), include it in the scheme_topic.
 {profile_str}
