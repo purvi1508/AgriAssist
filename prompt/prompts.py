@@ -1,3 +1,14 @@
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import PydanticOutputParser
+
+def build_prompt(template: str, input_text: dict, parser: PydanticOutputParser):
+    prompt = PromptTemplate(
+        input_variables=list(input_text.keys()),
+        partial_variables={"format_instructions": parser.get_format_instructions()},
+        template=template,
+    )
+    return prompt.format(**input_text)
+
 def build_farmer_profile_prompt(input_text: str, parser) -> str:
     """
     Builds a structured prompt for extracting a farmer's profile in JSON format.
@@ -11,8 +22,11 @@ def build_farmer_profile_prompt(input_text: str, parser) -> str:
     """
     prompt = f"""
     Extract a structured JSON of the farmer's profile and personalization preferences from the following text. 
-    Only include information mentioned or clearly inferable. Leave missing values as `null` or empty lists where appropriate.
+    The extracted profile should be written in **English**, even if the original input is in another language.
+    Only include information that is mentioned explicitly or clearly inferable.
+    Leave missing or unknown values as `null`, and use empty lists where appropriate.
 
+    Input Text:
     {input_text}
 
     {parser.get_format_instructions()}

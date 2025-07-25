@@ -9,3 +9,11 @@ beautifulsoup4
 google-cloud-firestore
 sentence_transformers == 5.0.0
 aiohttp
+langgraph_supervisor == 0.0.27
+langchain_google_genai == 2.1.8
+fastapi
+requests 
+rasterio 
+matplotlib 
+geopandas 
+folium

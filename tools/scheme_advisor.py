@@ -12,10 +12,40 @@ from google.cloud.firestore_v1.vector import Vector
 from sentence_transformers import SentenceTransformer
 from vertexai.generative_models import GenerativeModel
 import numpy as np
+from langchain.output_parsers import PydanticOutputParser
+from llm_service.service import llm
+from pydantic import BaseModel
+from typing import List
 
 load_dotenv()
 CSE_API_KEY = os.getenv("CSE_API_KEY")
 CSE_ID = os.getenv("CSE_ID")
+
+
+class SearchSentences(BaseModel):
+    search_phrases: List[str]
+
+def extract_intent_and_topic(query: str) -> dict:
+    parser = PydanticOutputParser(pydantic_object=SearchSentences)
+    prompt = f"""
+    You are an expert in Indian agriculture schemes and search optimization.
+
+    Given the farmer's **profile** and their **query**, generate a list of 5 to 7 natural language **search queries** or phrases that a person might enter into Google to get the most relevant answers.
+
+    These search phrases should:
+    - Be concise and relevant
+    - Capture the core intent of the farmer
+    - Include location, crop, scheme names, or typical benefits if available
+    - Avoid duplication or overly generic phrasing
+
+        Farmer Query:
+        "{query}"
+
+        {parser.get_format_instructions()}
+    """
+    response = llm.invoke(prompt)
+    structured = parser.parse(response)
+    return structured.model_dump()
 
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 firestore_client = firestore.Client()
@@ -54,26 +84,21 @@ def google_search(q, num_results=5):
         print(f"Search failed: {e}")
         return []
 
-def process_query(intent, topic):
-    results = []
-    queries = [f"{intent} {topic} for farmers", topic]
-    for q in queries:
-        search_results = google_search(q)
-        results.extend([{ **r, "query": q, "intent": intent, "scheme_topic": topic } for r in search_results])
-    return results
-
 def govt_scheme_advisor_pipeline(query, farmer_state, top_k=5):
-    intents = farmer_state.get("intent", [])
-    scheme_topics = farmer_state.get("scheme_topic", [])
-    farmer_id = farmer_state.get("profile", {}).get("id", "default_farmer")
+    intent_data = extract_intent_and_topic(query)
+    intents = intent_data["search_phrases"]
+    farmer_profile = farmer_state.get("profile", {}).get("farmer_profile", {})
+    name = farmer_profile.get("name", "Unknown")
+    village = farmer_profile.get("location", {}).get("village", "Unknown")
+    land_info = farmer_profile.get("land_info", {})
+    financial_profile = farmer_profile.get("financial_profile", {})
+    government_scheme_enrollments = farmer_profile.get("government_scheme_enrollments", {})
+    farmer_id = f"{name}_{village}".replace(" ", "_")
 
     # --- Scraping and storing ---
     all_scraped_metadata = []
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = [executor.submit(process_query, intent, topic)
-                   for intent in intents for topic in scheme_topics]
-        for f in as_completed(futures):
-            all_scraped_metadata.extend(f.result())
+    for intent in intents:
+        all_scraped_metadata.extend(google_search(intent))
 
     urls = [r["link"] for r in all_scraped_metadata]
     full_texts = asyncio.run(batch_scrape(urls))
@@ -114,10 +139,10 @@ def govt_scheme_advisor_pipeline(query, farmer_state, top_k=5):
             "url": d.get("url")
         } for d in (doc.to_dict() for doc in docs)]
 
-    # --- Extract Key Points in Parallel ---
-    def extract_relevant_points(doc, query, model):
+    # --- Extract Key Points with LLM ---
+    def extract_relevant_points(doc, query):
         prompt = f"""
-        Given the following scheme description and a farmer's query, extract 3–5 key bullet points that are most relevant to the query.
+        Given the following scheme description and a farmer's query, extract 10 key bullet points that are most relevant to the query.
 
         Query:
         {query}
@@ -130,39 +155,133 @@ def govt_scheme_advisor_pipeline(query, farmer_state, top_k=5):
 
         Return only the key points in simple bullet format.
         """.strip()
-        response = model.generate_content(prompt)
-        return response.text.strip()
+        response = llm.invoke(prompt)
+        return response
 
-    def extract_all_keypoints(docs, query, model):
-        def extract(doc):
-            return f"\u2022 {doc['title']}:\n{extract_relevant_points(doc, query, model)}"
+    def extract_all_keypoints(docs, query):
+        results = []
+        for doc in docs:
+            bullet_points = extract_relevant_points(doc, query)
+            formatted = f"\u2022 {doc['title']}:\n{bullet_points}"
+            results.append(formatted)
+        return "\n\n".join(results)
 
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [executor.submit(extract, doc) for doc in docs]
-            return "\n\n".join([f.result() for f in as_completed(futures)])
-
-    def build_prompt(query, context_docs, model, max_docs=5):
-        context = extract_all_keypoints(context_docs[:max_docs], query, model)
+    def build_prompt(query, context_docs, max_docs=5):
+        context = extract_all_keypoints(context_docs[:max_docs], query)
         return f"""
-        You are a helpful assistant for Indian farmers. Answer the question using only the provided key points extracted from relevant schemes.
+        You are an agricultural insights assistant that generates concise market updates for Indian farmers.
 
-        Query:
+        Analyze the following query and contextual data to produce a structured summary of relevant agricultural market trends. Focus on commodity price forecasts, demand-supply patterns, policy impacts, and international trade developments. The tone should be neutral, informative, and suitable for display in an agricultural advisory app.
+
+        ### User Query:
         {query}
 
-        Context:
+        ### Contextual Market Data:
         {context}
 
-        Be concise, accurate, and farmer-friendly in your response.
+        ### Farmer's Land Information:
+        {land_info}
+
+        ### Financial Profile:
+        {financial_profile}
+
+        ### Government Schemes Enrolled:
+        {government_scheme_enrollments}
+
+        Generate an **objective market trend update**, without directly addressing the user. Avoid conversational or second-person language.
         """.strip()
 
     # --- Generate Final Answer ---
     retrieved = retrieve(query)
-    model = GenerativeModel("gemini-2.5-pro")
-    prompt = build_prompt(query, retrieved, model)
-    response = model.generate_content(prompt)
+    prompt = build_prompt(query, retrieved)
+    response = llm.invoke(prompt)
 
     return {
         "query": query,
-        "answer": response.text.strip(),
-        "sources": retrieved
+        "answer": response,
     }
+
+
+# import nest_asyncio
+# import asyncio
+# nest_asyncio.apply()
+
+# farmer_state = {
+#     "profile": {
+#         "farmer_profile": {
+#             "name": "Ramesh",
+#             "contact": {
+#                 "phone": None,
+#                 "email": None
+#             },
+#             "age": None,
+#             "gender": None,
+#             "location": {
+#                 "village": "Nandgaon",
+#                 "district": None,
+#                 "state": "Maharashtra",
+#                 "country": "India",
+#                 "latitude": None,
+#                 "longitude": None,
+#                 "pincode": None
+#             },
+#             "language_preferences": {
+#                 "spoken": "Marathi, understands some Hindi",
+#                 "literacy_level": None
+#             },
+#             "device_info": {
+#                 "device_type": "Keypad phone",
+#                 "preferred_mode": "Voice"
+#             },
+#             "crops_grown": [
+#                 "Cotton",
+#                 "Soybean"
+#             ],
+#             "farming_history": {
+#                 "years_of_experience": 8,
+#                 "practices": [
+#                     "Traditional",
+#                     "Organic"
+#                 ],
+#                 "previous_issues": [
+#                     {
+#                         "year": 2022,
+#                         "problem": "Bollworm infestation on cotton crop",
+#                         "solution": "Sprayed neem oil"
+#                     }
+#                 ]
+#             },
+#             "land_info": {
+#                 "land_size_acres": 2.0,
+#                 "ownership_type": "Rented",
+#                 "irrigation_source": "Borewell",
+#                 "soil_type": None
+#             },
+#             "financial_profile": {
+#                 "crop_insurance": False,
+#                 "loan_status": "No debt"
+#             },
+#             "government_scheme_enrollments": [
+#                 "PM-Kisan",
+#                 "Soil Health Card"
+#             ]
+#         },
+#         "personalization": {
+#             "proactive_alerts": [],
+#             "helpful_reminders": [
+#                 "Neem oil spraying"
+#             ],
+#             "market_trends_summary": "Cotton",
+#             "assistant_suggestions": [],
+#             "emotional_context": {
+#                 "last_detected_sentiment": None,
+#                 "stress_indicator": None
+#             }
+#         }
+#     },
+#     "error": "string"
+# }
+
+# query = "What subsidies are available for drip irrigation in Maharashtra?"
+# response = govt_scheme_advisor_pipeline(query, farmer_state)
+# print(response["answer"])
