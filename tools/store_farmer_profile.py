@@ -1,5 +1,9 @@
 from google.cloud import firestore
-from tools.weather_tool import get_location_coordinates,get_pincode_from_coordinates
+from tools.weather_tool import get_location_coordinates, get_pincode_from_coordinates
+from logger.python_logger import AgriLogger
+
+logger = AgriLogger()
+
 def store_farmer_profile_to_firestore(profile_data):
     """
     Stores farmer profile to Firestore.
@@ -16,11 +20,10 @@ def store_farmer_profile_to_firestore(profile_data):
         doc_ref = db.collection(collection_name).document("profile")
         doc_ref.set(profile_data)
 
-        print(f"Farmer profile stored in collection: {collection_name}, document: profile")
+        logger.info(f"Farmer profile stored in collection: {collection_name}, document: profile")
 
     except Exception as e:
-        print(f"Error storing farmer profile: {e}")
-
+        logger.error(f"Error storing farmer profile: {e}")
 
 def update_location_in_firestore(profile_data: dict) -> dict:
     """
@@ -38,6 +41,7 @@ def update_location_in_firestore(profile_data: dict) -> dict:
         existing_doc = doc_ref.get()
 
         if not existing_doc.exists:
+            logger.error(f"Document not found for {collection_name}/profile")
             return {"status": "failed", "reason": f"Document not found for {collection_name}/profile"}
 
         existing_data = existing_doc.to_dict()
@@ -53,6 +57,7 @@ def update_location_in_firestore(profile_data: dict) -> dict:
         village = existing_location.get("village")
 
         if not state:
+            logger.error("Missing 'state' in existing profile")
             return {"status": "failed", "reason": "Missing 'state' in existing profile"}
 
         lat, lon, place = get_location_coordinates(state, district, village)
@@ -64,6 +69,8 @@ def update_location_in_firestore(profile_data: dict) -> dict:
         })
         doc_ref.set(existing_data)
 
+        logger.info(f"Updated location for collection: {collection_name}, document: profile")
+
         return {
             "status": "success",
             "updated_location": existing_location,
@@ -72,4 +79,5 @@ def update_location_in_firestore(profile_data: dict) -> dict:
         }
 
     except Exception as e:
+        logger.error(f"Error updating location in Firestore: {e}")
         return {"status": "failed", "reason": str(e)}

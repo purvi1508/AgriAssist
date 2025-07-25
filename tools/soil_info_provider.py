@@ -57,3 +57,8 @@ def get_soil_info(farmer_state):
     response = get_soilgrid_data(latitude, longitude)
     soil_data = extract_soil_properties(response)
     return soil_data
+
+def get_soil_info_lat_long(latitude, longitude):
+    response = get_soilgrid_data(latitude, longitude)
+    soil_data = extract_soil_properties(response)
+    return soil_data

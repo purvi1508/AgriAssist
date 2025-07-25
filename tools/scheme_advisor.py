@@ -10,7 +10,6 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
 from google.cloud.firestore_v1.vector import Vector
 from sentence_transformers import SentenceTransformer
-from vertexai.generative_models import GenerativeModel
 import numpy as np
 from langchain.output_parsers import PydanticOutputParser
 from llm_service.service import llm
@@ -40,7 +39,7 @@ def extract_intent_and_topic(query: str) -> dict:
 
         Farmer Query:
         "{query}"
-
+        Respond in this JSON format:
         {parser.get_format_instructions()}
     """
     response = llm.invoke(prompt)

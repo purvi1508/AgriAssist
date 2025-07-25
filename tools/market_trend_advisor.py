@@ -1,19 +1,34 @@
 import time
 from google.cloud import firestore
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import threading
 from llm_service.service import llm
-from datetime import datetime
+from typing import List
 from langchain.output_parsers import PydanticOutputParser
 from tools.mandi_price import get_mandi_prices_with_travel
 from tools.scheme_advisor import govt_scheme_advisor_pipeline
+from tools.soil_info_provider import get_soil_info_lat_long
+from tools.weather_tool import get_location_coordinates, get_google_weather
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from logger.python_logger import AgriLogger
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
+logger=AgriLogger()
 class QueryMarketTrend(BaseModel):
     query: list
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+class CuratedMarketInsights(BaseModel):
+    insights: List[str] = Field(..., description="Exactly 3 personalized market insights")
+
+
+def process_query(query, profile_data):
+    try:
+        return govt_scheme_advisor_pipeline(query, profile_data)
+    except Exception as e:
+        print("Error in scheme advisor task:", e)
+        return {}
+
 
 def safe_process_query(query, profile_data):
     try:
@@ -35,7 +50,7 @@ def generate_query_based_on_profile(farmer_state: dict) -> list:
 
     Farmer Profile:
     {farmer_profile}
-
+    Respond in this JSON format:
     {parser.get_format_instructions()}
     """
     
@@ -132,12 +147,44 @@ def run_scheme_advisor(profile_data, scheme_results):
             else:
                 print(f"Failed to process query: {futures[future]}")
 
-def process_query(query, profile_data):
-    try:
-        return govt_scheme_advisor_pipeline(query, profile_data)
-    except Exception as e:
-        print("Error in scheme advisor task:", e)
-        return {}
+
+def generate_soil_info(profile_data: dict,mandi_data):
+    parser = PydanticOutputParser(pydantic_object=CuratedMarketInsights)
+    farmer_profile = profile_data.get("profile", {}).get("farmer_profile", {})
+    state = farmer_profile.get("location", {}).get("state", None)
+    crops = farmer_profile.get("crops_grown", [])
+    latitude,longitude,_=get_location_coordinates(state=state)
+    soil_info=get_soil_info_lat_long(latitude, longitude)
+    weather_info=get_google_weather(latitude, longitude)
+    prompt=f"""
+        You are an intelligent agricultural advisor. Your task is to provide 3 personalized, actionable insights to a farmer based on the following information:
+
+        1. **Soil Data:** Information about the soil at the farmer's location, including type, texture, pH, and organic carbon content.
+        2. **Weather Info:** Current and forecasted weather conditions, including rainfall, temperature, and humidity.
+        3. **Mandi Data:** A list of markets with crop-wise modal prices, travel distances, and estimated travel costs.
+
+        Use this information to generate exactly **3 curated insights** that help the farmer:
+        - Choose the best mandi to sell their produce
+        - Make weather-aware selling or harvesting decisions
+        - Understand which crops suit their soil for better future planning
+
+        ### Soil Data:
+        {soil_info}
+
+        ### Weather Info:
+        {weather_info}
+
+        ### Mandi Data:
+        {mandi_data}
+
+        ### Output Format:
+        Respond in this JSON format:
+        {parser.get_format_instructions()}
+        """
+    {parser.get_format_instructions()}
+    raw_response = llm.invoke(prompt)
+    structured = parser.parse(raw_response)
+    return structured.query
 
 def generate_personalized_insights(profile_data: dict):
     db = firestore.Client()
@@ -171,11 +218,10 @@ def generate_personalized_insights(profile_data: dict):
 
     mandi_thread.join()
     scheme_thread.join()
-
+    tot_updates=generate_soil_info(profile_data,crop_mandi_data)
     return {
-        "mandi_data": crop_mandi_data,
+        "mandi_data": tot_updates,
         "scheme_advisor": scheme_results,
-        "status": "success"
     }
 
 ans=generate_personalized_insights({
@@ -212,7 +258,7 @@ ans=generate_personalized_insights({
                 "preferred_mode": "Voice"
             },
             "crops_grown": [
-                "Cotton",
+                "Sugarcane",
                 "Soybean"
             ],
             "farming_history": {

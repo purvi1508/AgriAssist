@@ -17,3 +17,4 @@ rasterio
 matplotlib 
 geopandas 
 folium
+structlog
