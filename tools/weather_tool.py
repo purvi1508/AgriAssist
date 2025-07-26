@@ -1,9 +1,22 @@
 import os
 import requests
 from dotenv import load_dotenv
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from typing import Optional
 
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+class FarmerInfoInput(BaseModel):
+    state: str
+    district: Optional[str] = None
+    village: Optional[str] = None
+
+class CoordinateInput(BaseModel):
+    """Input schema for reverse geocoding to get pincode."""
+    lat: float = Field(..., description="Latitude of the location")
+    lon: float = Field(..., description="Longitude of the location")
 
 def get_location_coordinates(state, district=None, village=None):
     place_components = [village, district, state]
@@ -18,6 +31,50 @@ def get_location_coordinates(state, district=None, village=None):
         return location["lat"], location["lng"], place_name
     else:
         raise Exception("Geocoding failed: " + response.get("error_message", "Unknown error"))
+    
+@tool(args_schema=FarmerInfoInput)
+def get_location_coordinates_tools(state: str, district: Optional[str] = None, village: Optional[str] = None):
+    """
+    Converts a human-readable location (state, district, village) into geographic coordinates
+    using the Google Maps Geocoding API.
+
+    This tool is helpful when only administrative location information is available,
+    and latitude/longitude are needed for downstream tasks like soil data retrieval.
+
+    Parameters:
+    -----------
+    state : str
+        The name of the state (e.g., "Maharashtra").
+
+    district : str, optional
+        The name of the district (e.g., "Aurangabad").
+
+    village : str, optional
+        The name of the village (e.g., "Paithan").
+
+    Returns:
+    --------
+    dict
+        A dictionary with:
+        - latitude (float)
+        - longitude (float)
+        - location_name (str) — resolved full location used for geocoding
+
+    Example:
+    --------
+    >>> get_location_coordinates_tools("Maharashtra", "Aurangabad", "Paithan")
+    {
+        "latitude": 19.4795,
+        "longitude": 75.3856,
+        "location_name": "Paithan, Aurangabad, Maharashtra"
+    }
+    """
+    lat, lon, place_name = get_location_coordinates(state, district, village)
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "location_name": place_name
+    }
 
 def get_pincode_from_coordinates(lat, lon):
     url = f"https://maps.googleapis.com/maps/api/geocode/json?latlng={lat},{lon}&key={GOOGLE_API_KEY}"
@@ -29,6 +86,29 @@ def get_pincode_from_coordinates(lat, lon):
             if 'postal_code' in component['types']:
                 return component['long_name']
     return None
+
+@tool(args_schema=CoordinateInput)
+def get_pincode_from_coordinates_tools(lat, lon):
+    """
+    Retrieves the postal pincode of a location given its latitude and longitude using the Google Maps Geocoding API.
+
+    This function performs reverse geocoding to extract the pincode (postal code) from the first matching address result.
+
+    Parameters:
+    -----------
+    lat : float
+        Latitude of the location (e.g., 19.7515)
+
+    lon : float
+        Longitude of the location (e.g., 75.7139)
+
+    Returns:
+    --------
+    str
+        The resolved postal pincode (e.g., "431005"), or `None` if not found.
+    """
+    data=get_pincode_from_coordinates(lat, lon)
+    return data
 
 def get_google_weather(lat, lon, units="METRIC"):
     url = "https://weather.googleapis.com/v1/currentConditions:lookup"
@@ -57,6 +137,81 @@ def get_google_weather(lat, lon, units="METRIC"):
         print("Weather API Error:", response.status_code, response.text)
         return {"message": "Weather data not available"}
 
+def get_7_day_forecast(lat, lon, units="METRIC"):
+    url = "https://weather.googleapis.com/v1/forecast:lookup"
+    params = {
+        "key": GOOGLE_API_KEY,
+        "location.latitude": lat,
+        "location.longitude": lon,
+        "unitsSystem": units,
+        "timesteps": "daily",
+    }
+
+    response = requests.get(url, params=params)
+    if response.status_code == 200:
+        data = response.json()
+
+        daily_forecasts = (
+            data.get("dailyForecasts", {})
+                .get("days", [])
+        )
+
+        forecast_list = []
+        for day in daily_forecasts[:7]:  # Limit to next 7 days
+            forecast = {
+                "date": day.get("validTime"),
+                "description": day.get("weatherCondition", {}).get("text"),
+                "temp_max": day.get("temperatureMax", {}).get("value"),
+                "temp_min": day.get("temperatureMin", {}).get("value"),
+                "precip_mm": day.get("precipitation", {}).get("qpf", {}).get("quantity"),
+                "humidity": day.get("relativeHumidity", {}).get("value"),
+                "wind_speed_kph": day.get("wind", {}).get("speed", {}).get("value"),
+                "wind_direction": day.get("wind", {}).get("direction", {}).get("cardinal"),
+                "uv_index": day.get("uvIndex", {}).get("value"),
+                "cloud_cover_percent": day.get("cloudCover", {}).get("value"),
+            }
+            forecast_list.append(forecast)
+
+        return forecast_list
+    else:
+        print("Forecast API Error:", response.status_code, response.text)
+        return {"message": "Forecast data not available"}
+    
+@tool(args_schema=CoordinateInput)
+def get_google_weather_tools(lat, lon):
+    """
+    Fetches a 7-day weather forecast for a given location using latitude and longitude.
+
+    This tool provides daily weather predictions including temperature ranges, humidity,
+    precipitation, wind conditions, UV index, and cloud cover. It uses the Google Weather API 
+    (or a similar provider) to enable weather-aware agricultural or planning decisions.
+
+    Parameters:
+    -----------
+    lat : float
+        Latitude of the target location.
+
+    lon : float
+        Longitude of the target location.
+
+    Returns:
+    --------
+    list of dict
+        A list of dictionaries, each containing forecast data for one day:
+        - date: Forecast date in ISO format
+        - description: General weather condition (e.g., "Partly Cloudy")
+        - temp_max: Maximum expected temperature (°C)
+        - temp_min: Minimum expected temperature (°C)
+        - precip_mm: Expected precipitation (mm)
+        - humidity: Relative humidity (%) 
+        - uv_index: UV index value
+        - wind_speed_kph: Wind speed (km/h)
+        - wind_direction: Cardinal wind direction (e.g., "NE", "W")
+        - cloud_cover_percent: Cloud cover (%)
+    """
+    result = get_7_day_forecast(lat, lon)
+    return result
+
 def get_air_quality_google(lat, lon):
     air_quality_url = "https://airquality.googleapis.com/v1/currentConditions:lookup"
     params = {"key": GOOGLE_API_KEY}
@@ -80,10 +235,35 @@ def get_air_quality_google(lat, lon):
         "dominant_pollutant": uaqi_data.get("dominantPollutant")
     }
 
+@tool(args_schema=CoordinateInput)
+def get_air_quality_google_tools(lat: float, lon: float) -> dict:
+    """
+    Retrieves current air quality information from the Google Air Quality API for a given location.
+
+    Parameters:
+    -----------
+    lat : float
+        Latitude of the location to check air quality.
+    
+    lon : float
+        Longitude of the location to check air quality.
+
+    Returns:
+    --------
+    dict
+        Dictionary containing:
+        - aqi: Air Quality Index (numerical value)
+        - category: Descriptive category of the AQI (e.g., "Good", "Moderate", "Unhealthy")
+        - dominant_pollutant: The primary pollutant contributing to the AQI
+    """
+    result = get_air_quality_google(lat, lon)
+    return result
+
 # ----------------------------
 # Main aggregation function
 # ----------------------------
-def get_farmer_info(state: str, district: str = None, village: str = None) -> dict:
+@tool(args_schema=FarmerInfoInput)
+def get_farmer_info(state: str, district: Optional[str] = None, village: Optional[str] = None) -> dict:
     """
     Retrieve weather and air quality information for a farmer's location using Google APIs.
 

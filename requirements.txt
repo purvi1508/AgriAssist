@@ -13,8 +13,5 @@ langgraph_supervisor == 0.0.27
 langchain_google_genai == 2.1.8
 fastapi
 requests 
-rasterio 
-matplotlib 
-geopandas 
-folium
 structlog
+uvicorn

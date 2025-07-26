@@ -1,12 +1,18 @@
-from pydantic import BaseModel
-import base64
-from llm_service.service import llm
+from pydantic import BaseModel, Field
+from llm_service.service import llm_3
+from langchain_core.tools import tool
 from langchain.output_parsers import PydanticOutputParser
 from langchain_core.messages import HumanMessage
+from typing import Dict
 from PIL import Image
+import base64
 import requests
 from io import BytesIO
+import re
 
+llm = llm_3
+
+# ---------- Image Loader ----------
 def load_image(path_or_url_or_base64: str) -> Image.Image:
     if path_or_url_or_base64.startswith("http://") or path_or_url_or_base64.startswith("https://"):
         response = requests.get(path_or_url_or_base64)
@@ -19,92 +25,90 @@ def load_image(path_or_url_or_base64: str) -> Image.Image:
     else:
         return Image.open(path_or_url_or_base64)
 
-class PlantTypeOutput(BaseModel):
+# ---------- Output Models ----------
+class PlantDiagnosisInput(BaseModel):
+    plant_image_path: str = Field(..., description="Path to the plant image")
+    user_prompt: str = Field(..., description="Prompt or message from the user describing the issue")
+
+class PlantInitialAnalysisOutput(BaseModel):
     plant_type: str
-
-def identify_plant(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=PlantTypeOutput)
-    prompt = f"""
-You are an insightful plant disease expert, helping a concerned farmer.
-Your role is to gently analyze the provided plant image and their description to identify the plant type with clarity.
-Respond in a warm, helpful tone.
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
-
-class SymptomOutput(BaseModel):
+    detected_signs: list[str]
     symptoms: list[str]
 
-def collect_symptoms(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=SymptomOutput)
-    plant_type=state["plant_type"]
-    user_prompt=state["user_prompt"]
-    prompt= f"""
-You are a plant disease assistant.
-Based on the user's description and plant type, extract a list of symptoms.
-Plant type: {plant_type}
-
-Description: {user_prompt}
-
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
-
-class DiseaseMatchOutput(BaseModel):
+class DiseaseAnalysisOutput(BaseModel):
     probable_disease: str
-
-def match_disease(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=DiseaseMatchOutput)
-    plant_type=state["plant_type"]
-    symptoms=", ".join(state["symptoms"])
-    prompt = f"""
-You are a plant pathologist.
-Given the plant type and symptoms, determine the most probable disease affecting the plant.
-
-Plant type: {plant_type}
-Symptoms: {symptoms}
-
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
+    disease_type: str  # e.g., "fungal", "viral", "nutritional"
+    explanation: str
 
 class DiagnosisValidationOutput(BaseModel):
-    confidence_score: float  
+    confidence_score: float
     reason: str
 
+class TreatmentOutput(BaseModel):
+    organic_treatment: str
+    chemical_treatment: str
+    precautions: str
+
+# ---------- Utility ----------
+def extract_url(text: str) -> str:
+    url_pattern = r"(https?://[^\s]+)"
+    match = re.search(url_pattern, text)
+    return match.group(0) if match else ""
+
+# ---------- Step 1: Analyze Image + Extract Symptoms ----------
+def analyze_plant(state: dict) -> dict:
+    parser = PydanticOutputParser(pydantic_object=PlantInitialAnalysisOutput)
+    prompt = f"""
+You are a smart plant disease assistant.
+Given the plant image and user's description, do the following:
+1. Identify the plant type.
+2. List visible signs from the image (spots, mold, discoloration, etc).
+3. Extract symptoms described by the user.
+
+Respond with structured data.
+{parser.get_format_instructions()}
+"""
+    image = load_image(state["plant_image_path"])
+    response = llm.invoke([
+        HumanMessage(content=[
+            {"type": "text", "text": state["user_prompt"]},
+            {"type": "image", "image": image}
+        ]),
+        HumanMessage(content=prompt)
+    ])
+    print(response)
+    structured = parser.parse(response.content)
+    return {**state, **structured.model_dump()}
+
+# ---------- Step 2: Diagnose Disease + Explain ----------
+def diagnose_disease(state: dict) -> dict:
+    parser = PydanticOutputParser(pydantic_object=DiseaseAnalysisOutput)
+    prompt = f"""
+You are a plant pathologist.
+Given the plant type, symptoms, and detected signs, provide:
+1. Most probable disease name.
+2. Classify it (fungal, viral, nutritional, etc).
+3. Explain in simple terms how this disease works and harms the plant.
+
+Plant: {state['plant_type']}
+Symptoms: {state['symptoms']}
+Signs: {state['detected_signs']}
+
+{parser.get_format_instructions()}
+"""
+    image = load_image(state["plant_image_path"])
+    response = llm.invoke([
+        HumanMessage(content=[
+            {"type": "text", "text": state["user_prompt"]},
+            {"type": "image", "image": image}
+        ]),
+        HumanMessage(content=prompt)
+    ])
+    print(response)
+    structured = parser.parse(response.content)
+    return {**state, **structured.model_dump()}
+
+# ---------- Step 3: Validate Diagnosis ----------
 def validate_diagnosis(state: dict) -> dict:
     parser = PydanticOutputParser(pydantic_object=DiagnosisValidationOutput)
     prompt = f"""
@@ -127,103 +131,18 @@ Disease: {state["probable_disease"]}
         HumanMessage(content=prompt)
     ])
     print(response)
-    structured = parser.parse(response)
+    structured = parser.parse(response.content)
     return {**state, **structured.model_dump()}
 
-
-class TreatmentOutput(BaseModel):
-    organic_treatment: str
-    chemical_treatment: str
-    precautions: str
-
+# ---------- Step 4: Recommend Treatment ----------
 def recommend_treatment(state: dict) -> dict:
     parser = PydanticOutputParser(pydantic_object=TreatmentOutput)
-    probable_disease=state["probable_disease"]
-    plant_type=state["plant_type"]
-    prompt= f"""
+    prompt = f"""
 You are an experienced agricultural advisor helping a farmer.
 Provide both organic and chemical treatment options for the diagnosed disease in a clear, farmer-friendly way.
 
-Disease: {probable_disease}
-Plant type: {plant_type}
-
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
-class VisualSignsOutput(BaseModel):
-    detected_signs: list[str]
-
-def detect_signs(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=VisualSignsOutput)
-    prompt = f"""
-You are a sharp-eyed plant health inspector.
-Carefully examine the plant image to detect visible signs such as spots, lesions, discoloration, mold, etc.
-Be precise but avoid assumptions beyond what's visible.
-
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
-class DiseaseTypeOutput(BaseModel):
-    disease_type: str  # e.g., "fungal", "viral", "nutritional", etc.
-
-def assess_disease_type(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=DiseaseTypeOutput)
-    prompt = f"""
-You are a plant pathologist specializing in classifying diseases.
-Based on the plant type, symptoms, and visible signs, identify whether this is a fungal, bacterial, viral, nutritional, or environmental disease.
-
-Plant: {state["plant_type"]}
-Symptoms: {state["symptoms"]}
-Detected Signs: {state.get("detected_signs", [])}
-
-{parser.get_format_instructions()}
-"""
-    image = load_image(state["plant_image_path"])
-    response = llm.invoke([
-        HumanMessage(content=[
-            {"type": "text", "text": state["user_prompt"]},
-            {"type": "image", "image": image}
-        ]),
-        HumanMessage(content=prompt)
-    ])
-    print(response)
-    structured = parser.parse(response)
-    return {**state, **structured.model_dump()}
-
-class DiseaseMechanismOutput(BaseModel):
-    explanation: str
-
-def explain_disease_mechanism(state: dict) -> dict:
-    parser = PydanticOutputParser(pydantic_object=DiseaseMechanismOutput)
-    prompt = f"""
-You are a scientific plant disease communicator.
-Explain in simple terms how this disease affects the plant – how it spreads, what parts it damages, and its lifecycle.
-
 Disease: {state["probable_disease"]}
-Type: {state.get("disease_type", "unknown")}
-Plant: {state["plant_type"]}
+Plant type: {state["plant_type"]}
 
 {parser.get_format_instructions()}
 """
@@ -236,38 +155,42 @@ Plant: {state["plant_type"]}
         HumanMessage(content=prompt)
     ])
     print(response)
-    structured = parser.parse(response)
+    structured = parser.parse(response.content)
     return {**state, **structured.model_dump()}
 
+# ---------- Full Pipeline ----------
+@tool(args_schema=PlantDiagnosisInput)
+def run_full_diagnosis_pipeline(plant_image_path,user_prompt) -> Dict:
+    """
+    Executes a complete plant disease diagnosis workflow using the provided plant image and user input.
 
-def run_full_diagnosis_pipeline(state: dict) -> dict:
+    The pipeline performs the following sequential steps:
+    1. **Analyze Plant Image**: Extracts relevant visual features from the plant image using LLM-based perception.
+    2. **Diagnose Disease**: Interprets the extracted data to identify possible plant diseases.
+    3. **Validate Diagnosis**: Cross-checks the diagnosis for consistency and confidence.
+    4. **Recommend Treatment**: Provides actionable treatment recommendations tailored to the diagnosis.
+
+    This tool is optimized for efficiency by limiting to one LLM call per step while maintaining high diagnostic quality.
+
+    Parameters:
+    - plant_image_path (str): Path or URL to the plant image.
+    - user_prompt (str): User-specified context or concern (e.g., symptoms, crop type, location).
+
+    Returns:
+    - Dict: Structured result containing analysis, diagnosis, validation, and treatment information, or an error message if the pipeline fails.
     """
-    Runs the full diagnosis pipeline:
-    1. Identify plant
-    2. Extract symptoms
-    3. Match probable disease
-    4. Validate the diagnosis
-    5. Recommend treatments
-    """
+
+    state = {
+        "plant_image_path": plant_image_path,
+        "user_prompt": user_prompt
+    }
+
     try:
-        state = identify_plant(state)
-        state = detect_signs(state)
-        state = collect_symptoms(state)
-        state = match_disease(state)
-        state = assess_disease_type(state)
-        state = explain_disease_mechanism(state)
-        state = validate_diagnosis(state)
-        state = recommend_treatment(state)
+        state = analyze_plant(state)           # Step 1: 1 LLM call
+        state = diagnose_disease(state)        # Step 2: 1 LLM call
+        state = validate_diagnosis(state)      # Step 3: 1 LLM call
+        state = recommend_treatment(state)     # Step 4: 1 LLM call
         return state
-
     except Exception as e:
         print(f"Error in pipeline: {str(e)}")
         return {"error": str(e), **state}
-
-initial_state = {
-    "plant_image_path": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRV2Ki4WV-ehcN8wgYlgwWPu-lCmuxFUarx6w&s",
-    "user_prompt": "My plant is suffering from some problem. Can you help me diagnose it?"
-}
-
-final_state = run_full_diagnosis_pipeline(initial_state)
-print(final_state)
