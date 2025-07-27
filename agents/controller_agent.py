@@ -30,7 +30,7 @@ checkpointer = InMemorySaver()
 store = InMemoryStore()
 
 workflow = create_supervisor(
-    [GovtSchemeAdvisorAgent,MarketInfoAgent,final_graph, save_to_history],
+    tools=[GovtSchemeAdvisorAgent,MarketInfoAgent,final_graph],
     model=llm_3,
     prompt=("""
     You are AgriAdvisorSupervisor.
@@ -157,8 +157,8 @@ workflow = create_supervisor(
     """)
 
 )
-thread_id = str(uuid.uuid4())
-final_agent_graph = workflow.compile(
-    checkpointer=checkpointer,
-    store=store
-)
+# thread_id = str(uuid.uuid4())
+# final_agent_graph = workflow.compile(
+#     checkpointer=checkpointer,
+#     store=store
+# )

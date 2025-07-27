@@ -15,3 +15,5 @@ fastapi
 requests 
 structlog
 uvicorn
+pydub
+ffmpeg-python

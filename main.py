@@ -7,8 +7,8 @@ from models.output_structure import InfoResponse
 from pydantic import BaseModel
 from fastapi import HTTPException
 import uvicorn
+from google import genai
 from typing import Optional
-from agents.controller_agent import final_agent_graph
 from fastapi.responses import StreamingResponse
 from agents.main_agent import final_graph, FirestoreMemorySaver
 from google.cloud import firestore
@@ -31,6 +31,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+class TTSRequest(BaseModel):
+    text: str
+    voice: str = "Kore"  
 
 class QueryInput(BaseModel):
     query: str
@@ -51,7 +54,15 @@ def decode_base64_data(base64_data: str, file_type_hint: str = "image") -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp_file:
         tmp_file.write(base64.b64decode(encoded))
         return tmp_file.name 
-    
+
+def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
+    with wave.open(filename, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(rate)
+        wf.writeframes(pcm)
+
+
 def handle_multimodal_input(data: MultimodalRequest):
     prompt = data.prompt
     thread_id = data.thread_id or str(uuid.uuid4())
@@ -116,7 +127,8 @@ def get_market_trends(request: UserRequest):
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
-    
+
+        
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8080))
