@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agri-api-deployment
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: agri-api
+  template:
+    metadata:
+      labels:
+        app: agri-api
+    spec:
+      containers:
+      - name: agri-api
+        image: us-central1-docker.pkg.dev/optimum-lodge-395210/agri-repo/agri-api:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"

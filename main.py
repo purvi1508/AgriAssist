@@ -40,6 +40,7 @@ class QueryInput(BaseModel):
 
 class MultimodalRequest(BaseModel):
     prompt: str
+    email: str
     image_base64: Optional[str] = None
     audio_base64: Optional[str] = None
     thread_id: Optional[str] = None
@@ -54,14 +55,6 @@ def decode_base64_data(base64_data: str, file_type_hint: str = "image") -> str:
     with tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}") as tmp_file:
         tmp_file.write(base64.b64decode(encoded))
         return tmp_file.name 
-
-def wave_file(filename, pcm, channels=1, rate=24000, sample_width=2):
-    with wave.open(filename, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(rate)
-        wf.writeframes(pcm)
-
 
 def handle_multimodal_input(data: MultimodalRequest):
     prompt = data.prompt
@@ -116,6 +109,24 @@ async def update_location_api(email):
 
 @app.post("/chat")
 def chat_endpoint(data: MultimodalRequest):
+    db = firestore.Client()
+
+    # Get email from the request data (you must ensure `data.email` exists)
+    email = data.email 
+    user_ref = db.collection("users").document(email)
+    user_doc = user_ref.get()
+
+    if not user_doc.exists:
+        return {"status": "failed", "reason": f"No user found with email: {email}"}
+
+    profile_data = user_doc.to_dict()
+    farmer_profile = profile_data.get("profile", {}).get("farmer_profile", {})
+
+    # Convert to JSON string and append to prompt
+    json_string = json.dumps(farmer_profile, ensure_ascii=False)
+    data.prompt += "\n My profile" + json_string  # safer string appending
+
+    # Call the multimodal handler
     return handle_multimodal_input(data)
 
 @app.post("/api/personalized-market-trends")

@@ -32,5 +32,7 @@ gcloud run deploy $SERVICE_NAME \
   --region $REGION \
   --allow-unauthenticated \
   --port $PORT
+  --timeout=600s \        # Optional: extend timeout
+  --concurrency=1         # Optional: disable concurrency
 
 echo "✅ Deployment complete!"

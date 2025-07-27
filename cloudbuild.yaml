@@ -1,0 +1,8 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '--platform=linux/amd64', '-t', 'gcr.io/optimum-lodge-395210/agri-api', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/optimum-lodge-395210/agri-api']
+
+images:
+  - 'gcr.io/optimum-lodge-395210/agri-api'
