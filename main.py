@@ -5,6 +5,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from models.input_structure import InputState_Base
 from models.output_structure import InfoResponse 
 from pydantic import BaseModel
+from fastapi import HTTPException
+import uvicorn
 from typing import Optional
 from agents.controller_agent import final_agent_graph
 from fastapi.responses import StreamingResponse
@@ -114,3 +116,8 @@ def get_market_trends(request: UserRequest):
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+    
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
