@@ -7,7 +7,7 @@ from typing import List
 from langchain_core.tools import tool
 from langchain.output_parsers import PydanticOutputParser
 from tools.mandi_price import get_mandi_prices_with_travel
-from tools.scheme_advisor import govt_scheme_advisor_pipeline
+from tools.scheme_advisor import govt_scheme_advisor_pipeline, govt_scheme_advisor_pipeline_query
 from tools.weather_tool import get_location_coordinates
 from tools.soil_info_provider import get_soil_info_lati_longi
 from tools.weather_tool import get_location_coordinates, get_google_weather
@@ -32,6 +32,13 @@ def process_query(query, profile_data):
         return {}
 
 
+def process_query_scheme(query):
+    try:
+        return govt_scheme_advisor_pipeline_query(query)
+    except Exception as e:
+        print("Error in scheme advisor task:", e)
+        return {}
+    
 def safe_process_query(query, profile_data):
     try:
         return process_query(query, profile_data)
@@ -41,7 +48,7 @@ def safe_process_query(query, profile_data):
 
 def safe_process(query):
     try:
-        return process_query(query)
+        return process_query_scheme(query)
     except Exception as e:
         print(f"Error in scheme advisor task for query: {query}\n{e}")
         return None
@@ -74,7 +81,7 @@ def generate_query_based_on_query(farmer_query) -> list:
     prompt = f"""
     You are an agricultural market expert helping generate steps to achieve the query of farmer
 
-    Given the farmer's query, generate a list of 3 steps of 3 queries that can solve this
+    Given the farmer's query,  generate a list of 3 queries
     understand **market trends** — such as crop demand patterns, market saturation, seasonality, export potential, 
     or government interventions.
 
@@ -222,7 +229,7 @@ def generate_soil_info(profile_data: dict,mandi_data):
 
 def generate_soil_info_lat_long(latitude, longitude, mandi_data):
     parser = PydanticOutputParser(pydantic_object=CuratedMarketInsights)
-    soil_info=get_soil_info_lat_long(latitude, longitude)
+    soil_info=get_soil_info_lati_longi(latitude, longitude)
     weather_info=get_google_weather(latitude, longitude)
     prompt=f"""
         You are an intelligent agricultural advisor. Your task is to provide 3 personalized, actionable insights to a farmer based on the following information:
@@ -304,7 +311,7 @@ class MarketAgentInput(BaseModel):
 @tool(args_schema=MarketAgentInput)
 def market_agent(state: str, district: str, market: str, crops: List[str], farmer_query: str) -> dict:
     """
-    🔍 Market Agent: Mandi Intelligence + Scheme Advisor
+    Market Agent: Mandi Intelligence + Scheme Advisor
 
     This tool provides a comprehensive market intelligence report for Indian farmers, combining mandi price analysis,
     government scheme suggestions, and soil-linked insights.
@@ -371,7 +378,7 @@ def market_agent(state: str, district: str, market: str, crops: List[str], farme
 
     mandi_data = []
 
-    # 🧵 Fetch mandi data for crops in parallel
+    # Fetch mandi data for crops in parallel
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = {
             executor.submit(fetch_mandi_data, crop, latitude, longitude, state, district, market): crop

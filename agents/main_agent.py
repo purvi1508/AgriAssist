@@ -87,7 +87,7 @@ def generate(state: MessagesState):
 
     system_prompt = (
         "You are an expert agricultural assistant helping Indian farmers. "
-        "Use the context below to answer clearly in 3 sentences or less.\n\n"
+        f"Farmers Profile {profile_str}"
         f"{docs_content}"
     )
 
@@ -126,9 +126,9 @@ final_graph = graph_builder.compile(checkpointer=memory)
 
 # -------------------------------
 # 🔹 Run Example
-# # -------------------------------
+# -------------------------------
 # if __name__ == "__main__":
-#     user_input = "What subsidies are available for maize in Nashik district?"
+#     user_input = "What subsidies are available for maize in Nashik district?"+f"Farmers Profile {profile_str}"
 
 #     firestore_memory = FirestoreMemorySaver(thread_id)
 
@@ -140,7 +140,7 @@ final_graph = graph_builder.compile(checkpointer=memory)
 #     all_messages = existing_messages + [input_message]
 
 #     # Run LangGraph streaming
-#     for step in graph.stream(
+#     for step in final_graph.stream(
 #         {"messages": all_messages},
 #         config={"configurable": {"thread_id": thread_id}},
 #         stream_mode="values",

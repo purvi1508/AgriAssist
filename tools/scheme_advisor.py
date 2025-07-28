@@ -85,6 +85,110 @@ def google_search(q, num_results=5):
         print(f"Search failed: {e}")
         return []
 
+def govt_scheme_advisor_pipeline_query(query, top_k=5):
+    intent_data = extract_intent_and_topic(query)
+    intents = intent_data["search_phrases"]
+    farmer_id = "abc"
+
+    # --- Parallel Google Search ---
+    with ThreadPoolExecutor() as executor:
+        search_results = list(executor.map(google_search, intents))
+
+    all_scraped_metadata = [item for sublist in search_results for item in sublist]
+    urls = [r["link"] for r in all_scraped_metadata]
+
+    # --- Batch Scrape ---
+    full_texts = asyncio.run(batch_scrape(urls))
+
+    for meta, content in zip(all_scraped_metadata, full_texts):
+        meta["full_content"] = content
+        meta["source"] = "Google Search"
+        meta["scraped_at"] = datetime.utcnow().isoformat()
+
+    filtered = [r for r in all_scraped_metadata if len(r["full_content"].strip()) > 20]
+    texts = [r["full_content"] for r in filtered]
+
+    # --- Embeddings ---
+    embeddings = embedding_model.encode(texts, batch_size=16, show_progress_bar=False, normalize_embeddings=True)
+    embeddings = [normalize(e) for e in embeddings]
+
+    # --- Batch Vector DB Insert ---
+    docs_to_add = [{
+        **result,
+        "embedding": Vector(emb),
+        "farmer_id": farmer_id
+    } for result, emb in zip(filtered, embeddings)]
+
+    for doc in docs_to_add:
+        vector_collection.add(doc)
+
+    # --- Vector Retrieval ---
+    def retrieve(query):
+        query_vec = normalize(embedding_model.encode(query))
+        docs = vector_collection.find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_vec),
+            distance_measure=DistanceMeasure.DOT_PRODUCT,
+            limit=top_k
+        ).stream()
+
+        return [{
+            "title": d.get("title"),
+            "content": d.get("full_content"),
+            "source": d.get("source"),
+            "url": d.get("url")
+        } for d in (doc.to_dict() for doc in docs)]
+
+    # --- LLM Prompt Helpers ---
+    def extract_relevant_points(doc, query):
+        prompt = f"""
+        Given the following scheme description and a farmer's query, extract 10 key bullet points that are most relevant to the query.
+
+        Query:
+        {query}
+
+        Scheme Title:
+        {doc['title']}
+
+        Scheme Description:
+        {doc['content']}
+
+        Return only the key points in simple bullet format.
+        """.strip()
+        response = llm.invoke(prompt)
+        return response.content
+
+    def extract_all_keypoints(docs, query):
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(lambda doc: f"• {doc['title']}:\n{extract_relevant_points(doc, query)}", docs[:5]))
+        return "\n\n".join(results)
+
+    def build_prompt(query, context_docs, max_docs=5):
+        context = extract_all_keypoints(context_docs[:max_docs], query)
+        return f"""
+        You are an agricultural insights assistant that generates concise market updates for Indian farmers.
+
+        Analyze the following query and contextual data to produce a structured summary of relevant agricultural market trends. Focus on commodity price forecasts, demand-supply patterns, policy impacts, and international trade developments. The tone should be neutral, informative, and suitable for display in an agricultural advisory app.
+
+        ### User Query:
+        {query}
+
+        ### Contextual Market Data:
+        {context}
+
+        Generate an **objective market trend update**, without directly addressing the user. Avoid conversational or second-person language.
+        """.strip()
+
+    # --- Final Answer ---
+    retrieved = retrieve(query)
+    prompt = build_prompt(query, retrieved)
+    response = llm.invoke(prompt)
+
+    return {
+        "query": query,
+        "answer": response.content,
+    }
+   
 def govt_scheme_advisor_pipeline(query, farmer_state, top_k=5):
     intent_data = extract_intent_and_topic(query)
     intents = intent_data["search_phrases"]
@@ -190,7 +294,7 @@ def govt_scheme_advisor_pipeline(query, farmer_state, top_k=5):
         {government_scheme_enrollments}
 
         Generate an **objective market trend update**, without directly addressing the user. Avoid conversational or second-person language.
-        **Ans in 20 words**
+        **ans in 20 words**
         """.strip()
 
     # --- Generate Final Answer ---
